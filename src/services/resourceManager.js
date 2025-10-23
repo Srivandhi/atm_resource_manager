@@ -1,120 +1,209 @@
 import { isSafeState } from './bankerAlgorithm.js';
 
-// In-memory tracking for 3 ATMs, 3 resources (demo setup)
+// Configuration for 3 ATMs and 3 resource types
+const NUM_ATMS = 3;
+const NUM_RESOURCES = 3;
+
+// Current allocation: how many resources each ATM currently holds
 let allocation = [
-  [0, 0, 0], // ATM 0
-  [0, 0, 0], // ATM 1
-  [0, 0, 0], // ATM 2
+  [0, 0, 0], // ATM 0 (ATM ID 1)
+  [0, 0, 0], // ATM 1 (ATM ID 2)
+  [0, 0, 0], // ATM 2 (ATM ID 3)
 ];
 
-// Demo max needs for ATMs
+// Maximum resources each ATM might need during operation
 let maxNeed = [
-  [1, 1, 1],
-  [1, 0, 1],
-  [0, 1, 1],
+  [2, 1, 1], // ATM 0 max needs
+  [1, 2, 1], // ATM 1 max needs
+  [1, 1, 2], // ATM 2 max needs
 ];
 
-// For more permissive testing, you can increase resources:
-let available = [2, 2, 2]; // Start with 2 of each resource for smooth demo
+// Available resources in the system
+let available = [4, 4, 4]; // Increased for better availability
 
+// Queue for waiting requests
 const waitingQueue = [];
 
+// Helper: Validate ATM index
 function isValidAtmIdx(atmIdx) {
-  return typeof atmIdx === 'number' && atmIdx >= 0 && atmIdx < allocation.length;
+  return typeof atmIdx === 'number' && atmIdx >= 0 && atmIdx < NUM_ATMS;
 }
 
-// Grant queued requests if possible
-const tryGrantWaitingRequests = () => {
-  for (let i = 0; i < waitingQueue.length; ) {
-    const { atmIdx, reqArr, resolve } = waitingQueue[i];
-    const result = attemptAllocate(atmIdx, reqArr);
-    if (result.granted) {
-      console.log('Granting waiting request for ATM', atmIdx);
-      waitingQueue.splice(i, 1);
-      resolve(result);
-    } else {
-      i++;
+// Helper: Calculate remaining need for all ATMs
+function calculateNeed() {
+  return maxNeed.map((maxRow, i) => 
+    maxRow.map((maxVal, j) => maxVal - allocation[i][j])
+  );
+}
+
+// Helper: Check if request can be satisfied
+function canSatisfyRequest(atmIdx, reqArr, currentAvailable) {
+  // Check if enough resources available
+  for (let j = 0; j < NUM_RESOURCES; j++) {
+    if (reqArr[j] > currentAvailable[j]) {
+      return { can: false, reason: 'Insufficient available resources' };
     }
   }
-};
 
+  // Check if request exceeds remaining need
+  const need = calculateNeed();
+  for (let j = 0; j < NUM_RESOURCES; j++) {
+    if (reqArr[j] > need[atmIdx][j]) {
+      return { can: false, reason: 'Request exceeds maximum need' };
+    }
+  }
+
+  return { can: true };
+}
+
+// Attempt to allocate resources to an ATM
 const attemptAllocate = (atmIdx, reqArr) => {
   if (!isValidAtmIdx(atmIdx)) {
-    console.error('Invalid atmIdx:', atmIdx);
+    console.error('❌ Invalid atmIdx:', atmIdx);
     return { granted: false, reason: 'Invalid ATM index' };
   }
 
-  // Calculate remaining need per ATM
-  const need = maxNeed.map((m, i) => m.map((v, j) => v - allocation[i][j]));
+  console.log(`\n🔍 ATM ${atmIdx + 1} requesting resources:`, reqArr);
+  console.log('📊 Current available:', available);
+  console.log('📊 Current allocation:', allocation[atmIdx]);
 
-  if (!need[atmIdx] || need[atmIdx].length !== reqArr.length) {
-    console.error('Invalid need array at atmIdx:', atmIdx, need);
-    return { granted: false, reason: "Internal error: need array mismatch" };
+  // Check if request can be satisfied
+  const check = canSatisfyRequest(atmIdx, reqArr, available);
+  if (!check.can) {
+    console.log('❌ Request denied:', check.reason);
+    return { granted: false, reason: check.reason };
   }
 
-  // Check requested resources do not exceed needed
-  if (reqArr.some((v, j) => v > need[atmIdx][j])) {
-    return { granted: false, reason: 'Exceeds max claim' };
-  }
-
-  // Check requested resources do not exceed available
-  if (reqArr.some((v, j) => v > available[j])) {
-    return { granted: false, reason: 'Not enough resources' };
-  }
-
-  // Simulate allocation and resource availability
+  // Simulate allocation
   const tempAlloc = allocation.map(arr => [...arr]);
   const tempAvail = [...available];
 
-  for (let j = 0; j < reqArr.length; j++) {
+  for (let j = 0; j < NUM_RESOURCES; j++) {
     tempAlloc[atmIdx][j] += reqArr[j];
     tempAvail[j] -= reqArr[j];
   }
 
-  // Use Banker Algorithm's safety check on simulated data
+  // Calculate need for safety check
+  const need = maxNeed.map((maxRow, i) => 
+    maxRow.map((maxVal, j) => maxVal - tempAlloc[i][j])
+  );
+
+  // Run Banker's Algorithm safety check
   const { isSafe, safeSeq } = isSafeState(tempAvail, tempAlloc, need);
 
   if (isSafe) {
-    allocation = tempAlloc.map(arr => [...arr]); // deep clone
+    // Grant the request
+    allocation = tempAlloc.map(arr => [...arr]);
     available = [...tempAvail];
-    console.log('Granting request, new allocation:', allocation);
-    console.log('New available:', available);
+    console.log('✅ Request granted! Safe sequence:', safeSeq.map(i => `ATM${i + 1}`).join(' → '));
+    console.log('📊 New allocation:', allocation[atmIdx]);
+    console.log('📊 New available:', available);
     return { granted: true, safeSeq };
+  } else {
+    console.log('❌ Request denied: Would lead to unsafe state');
+    return { granted: false, reason: 'Unsafe state - potential deadlock' };
   }
-  return { granted: false, reason: 'Unsafe state' };
 };
 
+// Try to grant waiting requests
+const tryGrantWaitingRequests = () => {
+  console.log(`\n🔄 Checking ${waitingQueue.length} waiting request(s)...`);
+  
+  let granted = 0;
+  for (let i = 0; i < waitingQueue.length; ) {
+    const { atmIdx, reqArr, resolve } = waitingQueue[i];
+    const result = attemptAllocate(atmIdx, reqArr);
+    
+    if (result.granted) {
+      console.log(`✅ Granted waiting request for ATM ${atmIdx + 1}`);
+      waitingQueue.splice(i, 1);
+      resolve(result);
+      granted++;
+    } else {
+      i++;
+    }
+  }
+  
+  if (granted === 0 && waitingQueue.length > 0) {
+    console.log('⚠️  No waiting requests could be granted');
+  }
+};
+
+// Public API: Request resources
 export const requestResources = (atmIdx, reqArr) => {
-  console.log('requestResources called with atmIdx:', atmIdx, 'reqArr:', reqArr);
+  console.log(`\n📥 REQUEST from ATM ${atmIdx + 1}:`, reqArr);
+  
   if (!isValidAtmIdx(atmIdx)) {
-    console.error('Invalid atmIdx on requestResources:', atmIdx);
+    console.error('❌ Invalid atmIdx:', atmIdx);
     return Promise.resolve({ granted: false, reason: 'Invalid ATM index' });
   }
+
   return new Promise((resolve) => {
     const result = attemptAllocate(atmIdx, reqArr);
+    
     if (result.granted) {
       resolve(result);
     } else {
+      console.log(`⏳ ATM ${atmIdx + 1} added to waiting queue`);
       waitingQueue.push({ atmIdx, reqArr, resolve });
-      debugResourceState(); // Show blocked state immediately
     }
   });
 };
 
+// Public API: Release resources
 export const releaseResources = (atmIdx, relArr) => {
   if (!isValidAtmIdx(atmIdx)) {
-    console.error('Invalid atmIdx on releaseResources:', atmIdx);
+    console.error('❌ Invalid atmIdx on release:', atmIdx);
     return;
   }
-  for (let j = 0; j < relArr.length; j++) {
+
+  console.log(`\n📤 RELEASE from ATM ${atmIdx + 1}:`, relArr);
+
+  for (let j = 0; j < NUM_RESOURCES; j++) {
     allocation[atmIdx][j] -= relArr[j];
     available[j] += relArr[j];
   }
-  tryGrantWaitingRequests();
+
+  console.log('📊 Updated allocation:', allocation[atmIdx]);
+  console.log('📊 Updated available:', available);
+
+  // Try to grant waiting requests
+  if (waitingQueue.length > 0) {
+    tryGrantWaitingRequests();
+  }
 };
 
+// Public API: Debug current state
 export const debugResourceState = () => {
-  console.log('Allocation:', allocation);
-  console.log('Available:', available);
-  console.log('Waiting:', waitingQueue.map(q => q.atmIdx));
+  console.log('\n═══════════════════════════════════════');
+  console.log('📊 RESOURCE STATE');
+  console.log('═══════════════════════════════════════');
+  console.log('Available resources:', available);
+  console.log('\nATM Allocations:');
+  allocation.forEach((alloc, i) => {
+    const need = maxNeed[i].map((max, j) => max - alloc[j]);
+    console.log(`  ATM ${i + 1}: Allocated=${JSON.stringify(alloc)}, Need=${JSON.stringify(need)}, Max=${JSON.stringify(maxNeed[i])}`);
+  });
+  
+  if (waitingQueue.length > 0) {
+    console.log('\n⏳ Waiting queue:');
+    waitingQueue.forEach((item, idx) => {
+      console.log(`  ${idx + 1}. ATM ${item.atmIdx + 1} waiting for ${JSON.stringify(item.reqArr)}`);
+    });
+  } else {
+    console.log('\n✅ No requests waiting');
+  }
+  console.log('═══════════════════════════════════════\n');
+};
+
+// Reset function for testing
+export const resetResourceManager = () => {
+  allocation = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  available = [3, 3, 3];
+  waitingQueue.length = 0;
+  console.log('🔄 Resource manager reset');
 };
